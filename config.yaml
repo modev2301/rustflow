@@ -1,0 +1,32 @@
+# RustFlow Configuration
+
+# HTTP metrics server address
+metrics_addr: "127.0.0.1:8080"
+
+# Collector configurations
+collectors:
+  netflow: "0.0.0.0:2055"
+  sflow: "0.0.0.0:6343"
+
+# Logging configuration
+logging:
+  level: "info"  # debug, info, warn, error
+  structured: true
+
+# Output configuration
+output:
+  format: "json"  # json, binary, text
+  producer: "raw"  # raw, proto
+  transport: "file"  # file, kafka
+  # file_path: "flows.json"  # Comment out or remove to output to stdout
+  kafka:
+    brokers:
+      - "localhost:9092"
+    topic: "netflow"
+    key: null
+
+# Performance configuration
+performance:
+  buffer_size: 9000
+  worker_threads: 4
+  batch_size: 1000 
