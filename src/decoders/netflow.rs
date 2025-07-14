@@ -399,6 +399,9 @@ impl NetFlowDecoder {
         packet.sequence_number = data.get_u32();
         packet.observation_domain_id = data.get_u32();
 
+        debug!("Processing IPFIX packet: length={}, export_time={}, sequence={}, obs_domain={}", 
+               packet.length, packet.export_time, packet.sequence_number, packet.observation_domain_id);
+
         let flow_sets = self.decode_message_common(
             data,
             packet.observation_domain_id,
@@ -406,6 +409,11 @@ impl NetFlowDecoder {
             10,
         )?;
         packet.flow_sets = flow_sets;
+
+        debug!("IPFIX packet contains {} flow sets", packet.flow_sets.len());
+        
+        // Log template status for debugging
+        self.log_template_status();
 
         Ok(())
     }
@@ -492,6 +500,7 @@ impl NetFlowDecoder {
                 // IPFIX Template Set
                 let records = self.decode_template_set(&set_data, version)?;
                 for record in &records {
+                    debug!("Received IPFIX template {} with {} fields", record.template_id, record.field_count);
                     self.templates.add_template(
                         version,
                         obs_domain_id,
@@ -505,6 +514,9 @@ impl NetFlowDecoder {
                 // IPFIX Options Template Set
                 let records = self.decode_ipfix_options_template_set(&set_data)?;
                 for record in &records {
+                    debug!("Received IPFIX options template {} with {} scope fields and {} option fields", 
+                           record.template_id, record.scope_field_count, 
+                           record.field_count - record.scope_field_count);
                     self.templates.add_template(
                         version,
                         obs_domain_id,
@@ -524,10 +536,12 @@ impl NetFlowDecoder {
                 match self.templates.get_template(version, obs_domain_id, header.id) {
                     Ok(template) => match template {
                         TemplateType::Regular(template_record) => {
+                            debug!("Using template {} with {} fields for data set", header.id, template_record.fields.len());
                             let records = self.decode_data_set(&set_data, version, &template_record.fields)?;
                             Ok(FlowSet::Data(DataFlowSet { header, records }))
                         }
                         TemplateType::NetFlowV9Options(opts_template) => {
+                            debug!("Using NetFlow v9 options template {} for data set", header.id);
                             let records = self.decode_options_data_set(
                                 &set_data,
                                 version,
@@ -537,6 +551,7 @@ impl NetFlowDecoder {
                             Ok(FlowSet::OptionsData(OptionsDataFlowSet { header, records }))
                         }
                         TemplateType::IPFIXOptions(opts_template) => {
+                            debug!("Using IPFIX options template {} for data set", header.id);
                             let records = self.decode_options_data_set(
                                 &set_data,
                                 version,
@@ -547,7 +562,8 @@ impl NetFlowDecoder {
                         }
                     },
                     Err(_) => {
-                        debug!("Template not found for ID {}, returning raw", header.id);
+                        debug!("Template not found for ID {} (version {}, obs_domain {}), waiting for template...", 
+                               header.id, version, obs_domain_id);
                         Ok(FlowSet::Raw(raw_flow_set))
                     }
                 }
@@ -1119,6 +1135,23 @@ impl NetFlowDecoder {
         self.templates.templates.len()
     }
 
+    pub fn has_template(&self, version: u16, obs_domain_id: u32, template_id: u16) -> bool {
+        self.templates.get_template(version, obs_domain_id, template_id).is_ok()
+    }
+
+    pub fn get_available_templates(&self) -> Vec<(u16, u32, u16)> {
+        self.templates.templates.keys().cloned().collect()
+    }
+
+    pub fn log_template_status(&self) {
+        let templates = self.get_available_templates();
+        if templates.is_empty() {
+            debug!("No templates available");
+        } else {
+            debug!("Available templates: {:?}", templates);
+        }
+    }
+
     pub fn clear_templates(&mut self) {
         self.templates.templates.clear();
     }
@@ -1224,6 +1257,7 @@ impl NetFlowDecoder {
         for flow_set in &packet.flow_sets {
             match flow_set {
                 FlowSet::Data(data_flow_set) => {
+                    debug!("Processing IPFIX data flow set with {} records", data_flow_set.records.len());
                     for data_record in &data_flow_set.records {
                         let mut record = FlowRecord::default();
                         record.flow_type = FlowType::IPFIX;
@@ -1236,6 +1270,7 @@ impl NetFlowDecoder {
                     }
                 }
                 FlowSet::OptionsData(options_flow_set) => {
+                    debug!("Processing IPFIX options data flow set with {} records", options_flow_set.records.len());
                     for options_record in &options_flow_set.records {
                         let mut record = FlowRecord::default();
                         record.flow_type = FlowType::IPFIX;
@@ -1253,10 +1288,22 @@ impl NetFlowDecoder {
                         records.push(record);
                     }
                 }
-                _ => {} // Skip template sets and raw sets
+                FlowSet::Template(_) => {
+                    debug!("Skipping IPFIX template set");
+                }
+                FlowSet::IPFIXOptionsTemplate(_) => {
+                    debug!("Skipping IPFIX options template set");
+                }
+                FlowSet::Raw(_) => {
+                    debug!("Skipping IPFIX raw flow set");
+                }
+                _ => {
+                    debug!("Skipping unknown IPFIX flow set type");
+                }
             }
         }
 
+        debug!("Converted IPFIX packet to {} flow records", records.len());
         Ok(records)
     }
 }
